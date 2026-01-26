@@ -434,7 +434,7 @@ typedef struct {
 } triggerEvent_t;
 
 // MQTT Pub events
-#define MQTT_FIFO_SIZE 80 // To accommodate various sources like zones, groups, sensors
+#define MQTT_PUB_FIFO_SIZE 80 // To accommodate various sources like zones, groups, sensors
 typedef struct {
   mqttPubType_t type;         // Group, Sensor, Zone, System
   uint8_t number;             // index
