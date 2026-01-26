@@ -8,11 +8,13 @@
 #ifndef OHS_FUNCTIONS_H_
 #define OHS_FUNCTIONS_H_
 
+#include <errno.h>
+
 // Logger related
 #define FRAM_MSG_SIZE     16
 #define FRAM_HEADER_SIZE  4
-volatile uint16_t FRAMWritePos = 0;
-volatile uint16_t FRAMReadPos  = 0;
+volatile uint32_t FRAMWritePos = 0;
+volatile uint32_t FRAMReadPos  = 0;
 // FRAM buffers for decode
 static char rxBuffer[FRAM_MSG_SIZE];
 static char txBuffer[FRAM_HEADER_SIZE + FRAM_MSG_SIZE];
@@ -84,26 +86,26 @@ void pushToLogText(char *what) {
  */
 void pushToMqtt(mqttPubType_t type, uint8_t number, mqttPubFunction_t function) {
 
-  mqttEvent_t *outMsg = chPoolAlloc(&mqtt_pool);
+  mqttPubEvent_t *outMsg = chPoolAlloc(&mqtt_pub_pool);
 
   if (outMsg != NULL) {
     outMsg->type = type;
     outMsg->number = number;
     outMsg->function = function;
 
-    msg_t msg = chMBPostTimeout(&mqtt_mb, (msg_t)outMsg, TIME_IMMEDIATE);
+    msg_t msg = chMBPostTimeout(&mqtt_pub_mb, (msg_t)outMsg, TIME_IMMEDIATE);
     if (msg != MSG_OK) {
       //chprintf(console, "MB full %d\r\n", temp);
     }
   } else {
-    chprintf(console, "MQTT pool full!\r\n");
+    chprintf(console, "MQTT Pub pool full!\r\n");
     pushToLogText("FM"); // MQTT queue is full
   }
 }
 // for MQTT HAD
 void pushToMqttHAD(mqttPubType_t type, uint8_t number, mqttPubFunction_t function, uint8_t extra) {
 
-  mqttEvent_t *outMsg = chPoolAlloc(&mqtt_pool);
+  mqttPubEvent_t *outMsg = chPoolAlloc(&mqtt_pub_pool);
 
   if (outMsg != NULL) {
     outMsg->type = type;
@@ -111,12 +113,12 @@ void pushToMqttHAD(mqttPubType_t type, uint8_t number, mqttPubFunction_t functio
     outMsg->function = function;
     outMsg->extra = extra;
 
-    msg_t msg = chMBPostTimeout(&mqtt_mb, (msg_t)outMsg, TIME_IMMEDIATE);
+    msg_t msg = chMBPostTimeout(&mqtt_pub_mb, (msg_t)outMsg, TIME_IMMEDIATE);
     if (msg != MSG_OK) {
       //chprintf(console, "MB full %d\r\n", temp);
     }
   } else {
-    chprintf(console, "MQTT pool full!\r\n");
+    chprintf(console, "MQTT Pub pool full!\r\n");
     pushToLogText("FM"); // MQTT queue is full
   }
 }
@@ -141,6 +143,32 @@ void mqttGlobalHAD(uint8_t state) {
     if ((GET_CONF_ZONE_ENABLED(conf.zone[i])) &&
         (GET_CONF_ZONE_MQTT_HAD(conf.zone[i]))) {
       pushToMqttHAD(typeZone, i, functionHAD, state);
+    }
+  }
+}
+/*
+ * mqttRefreshZonesState
+ */
+void mqttRefreshZonesState(void) {
+  // Re-publish zone states
+  for (uint8_t i=0; i < ALARM_ZONES ; i++) {
+    if ((GET_CONF_ZONE_ENABLED(conf.zone[i]))
+      && (GET_CONF_ZONE_MQTT_PUB(conf.zone[i]))) {
+        pushToMqtt(typeZone, i, functionState);
+    }
+  }
+}
+/*
+ * mqttRefreshGroupsState
+ */
+void mqttRefreshGroupsState(void) {
+  // Re-publish group states
+  for (uint8_t i=0; i < ALARM_GROUPS ; i++) {
+    if (GET_CONF_GROUP_ENABLED(conf.group[i].setting)) {
+      // MQTT Pub
+      if (GET_CONF_GROUP_MQTT(conf.group[i].setting)) {
+        pushToMqtt(typeGroup, i, functionState);
+      }
     }
   }
 }
@@ -537,35 +565,81 @@ bool isPhoneNum(const char* num) {
 /*
  * Print node type
  */
-void printNodeType(BaseSequentialStream *chp, const char type) {
+const char *getNodeTypeString(const char type) {
   switch(type){
-    case 'K': chprintf(chp, "%s", text_Authentication); break;
-    case 'S': chprintf(chp, "%s", text_Sensor); break;
-    case 'I': chprintf(chp, "%s", text_Output); break;
-    case 'H': chprintf(chp, "%s", text_Siren); break;
-    default: chprintf(chp, "%s", text_Undefined); break;
+    case 'K': return text_Authentication;
+    case 'S': return text_Sensor;
+    case 'I': return text_Output;
+    case 'H': return text_Siren;
+    default : return text_Undefined;
   }
 }
 /*
  * Print node function
  */
-void printNodeFunction(BaseSequentialStream *chp, const char function) {
+const char *getNodeFunctionString(const char function) {
   switch(function){
-    case 'i': chprintf(chp, "%s", text_iButton); break;
-    case 'T': chprintf(chp, "%s", text_Temperature); break;
-    case 'H': chprintf(chp, "%s", text_Humidity); break;
-    case 'P': chprintf(chp, "%s", text_Pressure); break;
-    case 'V': chprintf(chp, "%s", text_Voltage); break;
-    case 'B': chprintf(chp, "%s", text_Battery); break;
-    case 'D': chprintf(chp, "%s", text_Digital); break;
-    case 'A': chprintf(chp, "%s", text_Analog); break;
-    case 'F': chprintf(chp, "%s", text_Float); break;
-    case 'X': chprintf(chp, "%s", text_TX_Power); break;
-    case 'G': chprintf(chp, "%s", text_Gas); break;
-    case 'I': chprintf(chp, "%s", text_Illumination); break;
-    default : chprintf(chp, "%s", text_Undefined); break;
+    case 'i': return text_iButton;
+    case 'f': return text_Fingerprint;
+    case 'T': return text_Temperature;
+    case 'H': return text_Humidity;
+    case 'P': return text_Pressure;
+    case 'V': return text_Voltage;
+    case 'B': return text_Battery;
+    case 'D': return text_Digital;
+    case 'A': return text_Analog;
+    case 'F': return text_Float;
+    case 'X': return text_TX_Power;
+    case 'G': return text_Gas;
+    case 'I': return text_Illumination;
+    default : return text_Undefined;
   }
 }
+/*
+ * Print node function Home Assistant class and unit
+ */
+const char *getNodeFunctionHAClass(const char function) {
+  switch(function){
+    case 'T': return text_temperature;
+    case 'H': return text_humidity;
+    case 'P': return text_pressure;
+    case 'V':
+    case 'B': return text_voltage;
+    case 'I': return text_illuminance;
+    default : return "";
+  }
+}
+/*
+ * Print node function Home Assistant unit
+ * *MUST match getNodeFunctionHAClass*
+ */
+const char *getNodeFunctionHAClassUnit(const char function) {
+  switch(function){
+    case 'T': return "°C";
+    case 'H': return "%";
+    case 'P': return "mbar";
+    case 'V':
+    case 'B': return "V";
+    case 'I': return "lx";
+    default : return "";
+  }
+}
+/*
+ * Print node type
+ */
+void printNodeFunction(BaseSequentialStream *chp, const char function) {
+  chprintf(chp, "%s", getNodeFunctionString(function));
+}
+/*
+ *
+ */
+//void addNodeAddressString(const uint8_t index, char *output, const uint8_t size) {
+//  strncat(output, (node[index].address < RADIO_UNIT_OFFSET) ? 'W' : 'R', LWIP_MIN(1, (size-strlen(output))));
+//  strncat(output, (node[index].address < RADIO_UNIT_OFFSET) ? node[index].address : (node[index].address - RADIO_UNIT_OFFSET), LWIP_MIN(3, (size-strlen(output))));
+//  strncat(output, node[index].type, LWIP_MIN(1, (size-strlen(output))));
+//  strncat(output, node[index].function, LWIP_MIN(1, (size-strlen(output))));
+//  strncat(output, node[index].number, LWIP_MIN(3, (size-strlen(output))));
+//}
 /*
  * Print node address and node name or NOT_SET.
  * printName: If name is known print also name or not_found
@@ -694,11 +768,28 @@ static uint8_t decodeLog(char *in, char *out, bool full){
             chprintf(chp, " %s", text_state);
           }
           break;
+        case 'r': chprintf(chp, "%s %s: ", text_reset, text_reason);
+          if (((uint32_t)in[2]<<24) & RCC_CSR_LPWRRSTF) {
+            chprintf(chp, "%s %s", text_low, text_power);
+          } else if (((uint32_t)in[2]<<RCC_CSR_RMVF_Pos) & RCC_CSR_WWDGRSTF) {
+              chprintf(chp, "%s", text_watchdog);
+          } else if (((uint32_t)in[2]<<RCC_CSR_RMVF_Pos) & RCC_CSR_IWDGRSTF) {
+              chprintf(chp, "%s", text_watchdog);
+          } else if (((uint32_t)in[2]<<RCC_CSR_RMVF_Pos) & RCC_CSR_SFTRSTF) {
+              chprintf(chp, "%s", text_software);
+          } else if (((uint32_t)in[2]<<RCC_CSR_RMVF_Pos) & RCC_CSR_PORRSTF) {
+              chprintf(chp, "%s", text_power_on);
+          } else if (((uint32_t)in[2]<<RCC_CSR_RMVF_Pos) & RCC_CSR_PADRSTF) {
+              chprintf(chp, "%s", text_reset);
+          } else if (((uint32_t)in[2]<<RCC_CSR_RMVF_Pos) & RCC_CSR_BORRSTF) {
+              chprintf(chp, "%s", text_brown_out);
+          }
+          break;
         default: chprintf(chp, "%s", text_unknown); break; // unknown
       }
     break;
     case 'N': // Remote nodes
-      printNodeType(chp, in[3]); chprintf(chp, ":");
+      chprintf(chp, "%s:", getNodeTypeString(in[3]));
       printNodeFunction(chp, in[4]);
       chprintf(chp, " %s ", text_address);
       printNodeAddress(chp, (uint8_t)in[2], (uint8_t)in[3], (uint8_t)in[4], (uint8_t)in[5], false);
@@ -862,6 +953,166 @@ static uint8_t decodeLog(char *in, char *out, bool full){
   //chprintf(chp, "."); // "." as end
 
   return groupNum;
+}
+/*
+ * Function to retrieve the reset reason
+ */
+uint8_t getResetReason(void) {
+  // Read the RCC Control/Status register and move the result to 8 bit int
+  // RCC_CSR_RMVF as 0
+  uint8_t reason = (RCC->CSR >> 24);
+
+  // Clear the reset flags by setting the RMVF bit
+  RCC->CSR |= RCC_CSR_RMVF;
+
+  return reason;
+}
+
+/*
+ * @brief Check is phone number authorized
+ *
+ * @param *number Phone number to check
+ *
+ * @return int8_t Index of authorized contact number, or -1 if not authorized
+ *
+ */
+int8_t isPhoneNumberAuthorized(char *number) {
+
+  for (uint8_t i = 0; i < CONTACTS_SIZE; i++) {
+    if (GET_CONF_CONTACT_ENABLED(conf.contact[i].setting)) {
+      if (strncmp(conf.contact[i].phone, number, PHONE_LENGTH - 1) == 0) {
+        return i;
+      }
+    }
+  }
+  return -1;
+}
+/**
+ * Safe strtof() with error handling
+ *
+ * @param str Input string to parse
+ * @param result Pointer to store parsed float
+ * @return 1 on success, 0 on error
+ */
+int8_t safeStrtof(const char *str, float *result) {
+
+  if (str == NULL || *str == '\0') {
+    return 0; // Error empty string
+  }
+
+  char *endptr;
+  errno = 0;
+  *result = strtof(str, &endptr);
+  if (errno == ERANGE) {
+    return 0; // Error out of range
+  }
+  if (endptr == str || *endptr != '\0') {
+    return 0; // Error invalid float
+  }
+
+  return 1;
+}
+
+/**
+ * Safe strtoul() with error handling
+ *
+ * @param str Input string to parse
+ * @param result Pointer to store parsed value
+ * @param base Numeric base (10, 16, etc.)
+ * @return 1 on success, 0 on error
+ */
+int8_t safeStrtoul(const char *str, uint32_t *result, int base) {
+
+  if (str == NULL || *str == '\0') {
+    return 0; // Error empty string
+  }
+
+  char *endptr;
+  errno = 0;
+  *result = strtoul(str, &endptr, base);
+  if (errno == ERANGE) {
+    return 0; // Error out of range
+  }
+  if (endptr == str || *endptr != '\0') {
+    return 0; // Error invalid number
+  }
+
+  return 1;
+}
+/*
+ * @brief Safe   strnlen implementation
+ * @param s      Input string
+ * @param maxlen Maximum length to check
+ * @return       Length of string up to maxlen
+ */
+static size_t safeStrnLen(const char *s, size_t maxlen) {
+    const char *p = memchr(s, 0, maxlen);
+    return p ? (size_t)(p - s) : maxlen;
+}
+
+/**
+ * Safe string comparison that respects buffer boundaries of both strings
+ *
+ * @param s1    First string buffer
+ * @param n1    Max size of first buffer
+ * @param s2    Second string buffer
+ * @param n2    Max size of second buffer
+ * @return      <0 if s1 < s2, >0 if s1 > s2, 0 if equal
+ */
+int safeStrcmp2(const char *s1, size_t n1, const char *s2, size_t n2) {
+    size_t l1 = safeStrnLen(s1, n1);
+    size_t l2 = safeStrnLen(s2, n2);
+
+    // Compare up to the length of the shorter string
+    size_t limit = (l1 < l2) ? l1 : l2;
+    int cmp = strncmp(s1, s2, limit);
+
+    // If characters differ, we have our answer
+    if (cmp != 0) {
+        return cmp;
+    }
+
+    // If prefixes match, the shorter string is "less than" the longer one
+    if (l1 < l2) {
+        return -1; // s1 is shorter, so s1 < s2
+    } else if (l1 > l2) {
+        return 1;  // s1 is longer, so s1 > s2
+    }
+
+    // Strings are identical in content and length
+    return 0;
+}
+/**
+ * Safe string comparison that respects buffer boundaries of first string only.
+ *
+ * @param s1    First string buffer
+ * @param n1    Max size of first buffer
+ * @param s2    Second string buffer
+ * @param n2    Max size of second buffer
+ * @return      <0 if s1 < s2, >0 if s1 > s2, 0 if equal
+ */
+int safeStrcmp1(const char *s1, size_t n1, const char *s2) {
+    size_t l1 = safeStrnLen(s1, n1);
+    size_t l2 = strlen(s2);
+
+    // Compare up to the length of the shorter string
+    size_t limit = (l1 < l2) ? l1 : l2;
+    int cmp = strncmp(s1, s2, limit);
+
+    // If characters differ, we have our answer
+    if (cmp != 0) {
+        return cmp;
+    }
+
+    // If prefixes match, the shorter string is "less than" the longer one
+    if (l1 < l2) {
+        return -1; // s1 is shorter, so s1 < s2
+    } else if (l1 > l2) {
+        return 1;  // s1 is longer, so s1 > s2
+    }
+
+    // Strings are identical in content and length
+    return 0;
 }
 
 #endif /* OHS_FUNCTIONS_H_ */

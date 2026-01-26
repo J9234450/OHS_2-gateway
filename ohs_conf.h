@@ -22,7 +22,7 @@
 #define OHS_NAME         "OHS2"
 #define OHS_MAJOR        1
 #define OHS_MINOR        5
-#define OHS_MOD          4
+#define OHS_MOD          5
 
 #define BACKUP_SRAM_SIZE 0x1000 // 4kB SRAM size
 
@@ -105,8 +105,9 @@
 #define NODE_CMD_AUTH_1       12
 #define NODE_CMD_AUTH_2       13
 #define NODE_CMD_AUTH_3       14
-#define NODE_CMD_ARMED        15
+#define NODE_CMD_ARMED_AWAY   15
 #define NODE_CMD_DISARM       16
+#define NODE_CMD_ARMED_HOME   17
 
 // Bit wise macros for various settings
 #define GET_CONF_ZONE_ENABLED(x)     ((x) & 0b1)
@@ -315,13 +316,16 @@
 #define GET_NODE_ENABLED(x)    ((x) & 0b1)
 #define GET_NODE_GROUP(x)      ((x >> 1U) & 0b1111)
 #define GET_NODE_BATT_LOW(x)   ((x >> 5U) & 0b1)
+#define GET_NODE_MQTT_HAD(x)   ((x >> 6U) & 0b1)
 #define GET_NODE_MQTT(x)       ((x >> 7U) & 0b1)
 #define SET_NODE_ENABLED(x)    x |= 1
 #define SET_NODE_GROUP(x,y)    x = (((x)&(0b1111111111100001))|(((y & 0b1111) << 1U)&(0b0000000000011110)))
 #define SET_NODE_BATT_LOW(x)   x |= (1 << 5U)
+#define SET_NODE_MQTT_HAD(x)   x |= (1 << 6U)
 #define SET_NODE_MQTT(x)       x |= (1 << 7U)
 #define CLEAR_NODE_ENABLED(x)  x &= ~1
 #define CLEAR_NODE_BATT_LOW(x) x &= ~(1 << 5U)
+#define CLEAR_NODE_MQTT_HAD(x) x &= ~(1 << 6U)
 #define CLEAR_NODE_MQTT(x)     x &= ~(1 << 7U)
 
 // Helper macros. Do not use in functions parameter!
@@ -429,14 +433,23 @@ typedef struct {
   float   value;    // = 0.0;
 } triggerEvent_t;
 
-// MQTT events
+// MQTT Pub events
 #define MQTT_FIFO_SIZE 80 // To accommodate various sources like zones, groups, sensors
 typedef struct {
   mqttPubType_t type;         // Group, Sensor, Zone, System
   uint8_t number;             // index
   mqttPubFunction_t function; // Name, Value, State, Arm state
   uint8_t extra;              // Extra values
-} mqttEvent_t;
+} mqttPubEvent_t;
+
+// MQTT Sub events
+#define MQTT_SUB_FIFO_SIZE 2
+#define MQTT_SUB_TOPIC_LENGTH 40
+#define MQTT_SUB_PAYLOAD_LENGTH 20
+typedef struct {
+  char topic[MQTT_SUB_TOPIC_LENGTH];
+  char payload[MQTT_SUB_PAYLOAD_LENGTH];
+} mqttSubEvent_t;
 
 // TCL callback
 typedef void (*script_cb_t) (char *result);
@@ -512,8 +525,11 @@ static MAILBOX_DECL(script_mb, script_mb_buffer, SCRIPT_FIFO_SIZE);
 static msg_t        trigger_mb_buffer[TRIGGER_FIFO_SIZE];
 static MAILBOX_DECL(trigger_mb, trigger_mb_buffer, TRIGGER_FIFO_SIZE);
 
-static msg_t        mqtt_mb_buffer[MQTT_FIFO_SIZE];
-static MAILBOX_DECL(mqtt_mb, mqtt_mb_buffer, MQTT_FIFO_SIZE);
+static msg_t        mqtt_pub_mb_buffer[MQTT_PUB_FIFO_SIZE];
+static MAILBOX_DECL(mqtt_pub_mb, mqtt_pub_mb_buffer, MQTT_PUB_FIFO_SIZE);
+
+static msg_t        mqtt_sub_mb_buffer[MQTT_SUB_FIFO_SIZE];
+static MAILBOX_DECL(mqtt_sub_mb, mqtt_sub_mb_buffer, MQTT_SUB_FIFO_SIZE);
 /*
  * Pools
  */
@@ -538,8 +554,12 @@ static MEMORYPOOL_DECL(script_pool, sizeof(scriptEvent_t), PORT_NATURAL_ALIGN, N
 static sensorEvent_t trigger_pool_queue[TRIGGER_FIFO_SIZE];
 static MEMORYPOOL_DECL(trigger_pool, sizeof(triggerEvent_t), PORT_NATURAL_ALIGN, NULL);
 
-static mqttEvent_t mqtt_pool_queue[MQTT_FIFO_SIZE];
-static MEMORYPOOL_DECL(mqtt_pool, sizeof(mqttEvent_t), PORT_NATURAL_ALIGN, NULL);
+static mqttPubEvent_t mqtt_pub_pool_queue[MQTT_PUB_FIFO_SIZE];
+static MEMORYPOOL_DECL(mqtt_pub_pool, sizeof(mqttPubEvent_t), PORT_NATURAL_ALIGN, NULL);
+
+static mqttSubEvent_t mqtt_sub_pool_queue[MQTT_SUB_FIFO_SIZE];
+static MEMORYPOOL_DECL(mqtt_sub_pool, sizeof(mqttSubEvent_t), PORT_NATURAL_ALIGN, NULL);
+
 
 // Triggers
 typedef struct {
@@ -1113,6 +1133,7 @@ void initScripts(struct scriptLL_t **pointer) {
         // cmd
         cmdSize = TCL_SCRIPT_LENGTH;
         if (uBSRead(&blockName[0], NAME_LENGTH, &tclCmd[0], &cmdSize) != UBS_RSLT_OK) {
+          umm_free(var->name);
           umm_free(var);
           chprintf(console, "uBS storage needs format!\r\n");
           break;

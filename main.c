@@ -1,14 +1,15 @@
 /*
  * OHS gateway code for HW v 2.0.x
- * Adam Baron (c) 2020-2024
+ * Adam Baron (c) 2020-now()
  *
  *
  */
 //TODO OHS move arm/disarm group to some kind of fifo, it take a lot of resources calling nodes, mqtt ...
 // Optimize stack and overflow
-#define PORT_INT_REQUIRED_STACK 128
-// Remove input queue for GPRS to save RAM
-#define STM32_SERIAL_USART6_IN_BUF_SIZE 0
+#define PORT_IDLE_THREAD_STACK_SIZE 64
+#define PORT_INT_REQUIRED_STACK 256
+
+// ToDo OHS: replace strtoul, strtof with safe versions
 
 // Standard libs
 #include <string.h>
@@ -18,6 +19,9 @@
 // ChibiOS
 #include "ch.h"
 #include "hal.h"
+// ChibiOS tests
+#include "rt_test_root.h"
+#include "oslib_test_root.h"
 // Added from ChibiOS
 #include "shell.h"
 #include "chprintf.h"
@@ -40,7 +44,7 @@ binary_semaphore_t mqttSem;
 // UMM
 #include "umm_malloc.h"
 #include "umm_malloc_cfg.h"
-#define UMM_MALLOC_CFG_HEAP_SIZE (1024*48)
+#define UMM_MALLOC_CFG_HEAP_SIZE (1024*50)
 char ohsUmmHeap[UMM_MALLOC_CFG_HEAP_SIZE] __attribute__((section(".ram4")));
 // TCL
 #define TCL_SCRIPT_LENGTH        (512)
@@ -75,14 +79,14 @@ typedef enum {
   gprs_ForceReset,
   gprs_Failed
 } gprsStatus_t;
-volatile gprsStatus_t gsmStatus = gprs_NotInitialized;
-volatile int8_t gprsIsAlive = 0;
-volatile int8_t gprsSetSMS = 0;
-volatile int8_t gprsReg = 2;
-volatile int8_t gprsStrength = 0;
-char gprsModemInfo[20] __attribute__((section(".ram4"))); // SIMCOM_SIM7600x-x
-char gprsSystemInfo[80] __attribute__((section(".ram4")));
-char gprsSmsText[128] __attribute__((section(".ram4")));
+volatile gprsStatus_t modemStatus = gprs_NotInitialized;
+volatile int8_t modemIsAlive = 0;
+volatile int8_t modemSetSMS = 0;
+volatile int8_t modemReg = 2;
+volatile int8_t modemSigStrength = 0;
+char modemModelInfo[20] __attribute__((section(".ram4"))); // SIMCOM_SIM7600x-x
+char modemSystemInfo[80] __attribute__((section(".ram4")));
+char modemSmsText[160] __attribute__((section(".ram4")));
 
 // LWIP
 #include "lwipthread.h"
@@ -99,7 +103,7 @@ char gprsSmsText[128] __attribute__((section(".ram4")));
 #include "lwip/apps/mdns.h"
 #endif
 // HTTPD OHS handler
-#include "ohs_httpdhandler.h"
+#include <ohs_httpd_handler.h>
 // MQTT
 #include "lwip/apps/mqtt_priv.h" // Needed for conf.mqtt
 #include "lwip/apps/mqtt.h"
@@ -123,7 +127,8 @@ char gprsSmsText[128] __attribute__((section(".ram4")));
 #include "ohs_th_radio.h"
 #include "ohs_th_trigger.h"
 #include "ohs_th_tcl.h"
-#include "ohs_th_mqtt.h"
+#include <ohs_th_mqtt_pub.h>
+#include <ohs_th_mqtt_sub.h>
 #include "ohs_th_heartbeat.h"
 #define SHELL_WA_SIZE THD_WORKING_AREA_SIZE(2*1024)
 /*
@@ -132,6 +137,9 @@ char gprsSmsText[128] __attribute__((section(".ram4")));
 int main(void) {
   halInit();
   chSysInit();
+
+  // Retrieve the reset reason
+  uint8_t resetReason = getResetReason();
 
   // Semaphores
   chBSemObjectInit(&gprsSem, false);
@@ -143,7 +151,7 @@ int main(void) {
   sdStart(&SD3,  &serialCfg);
   chprintf(console, "\r\nOHS v.%u.%u.%u start\r\n", OHS_MAJOR, OHS_MINOR, OHS_MOD);
   // GPRS modem
-  gprsInit(&SD6);
+  gprsInit(&UARTD6);
   // Init nodes
   initRuntimeNodes();
   // RS485
@@ -181,17 +189,14 @@ int main(void) {
   // Initialize .ram4
   memset(&tclCmd[0], 0, TCL_SCRIPT_LENGTH);
   memset(&tclOutput[0], 0, TCL_OUTPUT_LENGTH);
-  memset(&gprsModemInfo[0], 0, sizeof(gprsModemInfo));
-  memset(&gprsSmsText[0], 0, sizeof(gprsSmsText));
-  memset(&gprsSystemInfo[0], 0, sizeof(gprsSystemInfo));
+  memset(&modemModelInfo[0], 0, sizeof(modemModelInfo));
+  memset(&modemSmsText[0], 0, sizeof(modemSmsText));
+  memset(&modemSystemInfo[0], 0, sizeof(modemSystemInfo));
   memset(&logText[0], 0, LOG_TEXT_LENGTH);
   memset(&mqttPayload[0], 0, MQTT_PAYLOAD_LENGTH);
-  memset(&httpAlertMsg[0], 0 , HTTP_ALERT_MSG_SIZE); // Empty alert message
+  memset(&httpAlertMsg[0], 0 , HTTP_ALERT_MSG_SIZE);
 
   shellInit();
-
-  // Creating the mailboxes.
-  //chMBObjectInit(&alarmEvent_mb, alarmEvent_mb_buffer, ALARM_EVENT_FIFO_SIZE);
 
   // Pools
   chPoolObjectInit(&alarmEvent_pool, sizeof(alarmEvent_t), NULL);
@@ -201,7 +206,8 @@ int main(void) {
   chPoolObjectInit(&alert_pool, sizeof(alertEvent_t), NULL);
   chPoolObjectInit(&script_pool, sizeof(scriptEvent_t), NULL);
   chPoolObjectInit(&trigger_pool, sizeof(triggerEvent_t), NULL);
-  chPoolObjectInit(&mqtt_pool, sizeof(mqttEvent_t), NULL);
+  chPoolObjectInit(&mqtt_pub_pool, sizeof(mqttPubEvent_t), NULL);
+  chPoolObjectInit(&mqtt_sub_pool, sizeof(mqttSubEvent_t), NULL);
   // Prepare pools
   chPoolLoadArray(&alarmEvent_pool, (void *)alarmEvent_pool_queue, ALARM_EVENT_FIFO_SIZE);
   chPoolLoadArray(&logger_pool, (void *)logger_pool_queue, LOGGER_FIFO_SIZE);
@@ -210,11 +216,15 @@ int main(void) {
   chPoolLoadArray(&alert_pool, (void *)alert_pool_queue, ALERT_FIFO_SIZE);
   chPoolLoadArray(&script_pool, (void *)script_pool_queue, SCRIPT_FIFO_SIZE);
   chPoolLoadArray(&trigger_pool, (void *)trigger_pool_queue, TRIGGER_FIFO_SIZE);
-  chPoolLoadArray(&mqtt_pool, (void *)mqtt_pool_queue, MQTT_FIFO_SIZE);
+  chPoolLoadArray(&mqtt_pub_pool, (void *)mqtt_pub_pool_queue, MQTT_PUB_FIFO_SIZE);
+  chPoolLoadArray(&mqtt_sub_pool, (void *)mqtt_sub_pool_queue, MQTT_SUB_FIFO_SIZE);
 
   // SPI
   spiStart(&SPID1, &spi1cfg);
   // RFM69
+  if (GET_CONF_SYSTEM_FLAG_RADIO_FREQ(conf.systemFlags)) {
+    rfm69cfg.freqBand = RF69_868MHZ;
+  }
   rfm69Start(&rfm69cfg);
   rfm69SetHighPower(true); // long range version
 
@@ -233,15 +243,16 @@ int main(void) {
   chThdCreateStatic(waAEThread3, sizeof(waAEThread3), NORMALPRIO + 1, AEThread, (void*)"alarm 3");
   chThdCreateStatic(waLoggerThread, sizeof(waLoggerThread), NORMALPRIO, LoggerThread, (void*)"logger");
   chThdCreateStatic(waRS485Thread, sizeof(waRS485Thread), NORMALPRIO, RS485Thread, (void*)"rs485");
-  chThdCreateStatic(waRegistrationThread, sizeof(waRegistrationThread), NORMALPRIO - 1, RegistrationThread, (void*)"reg");
-  chThdCreateStatic(waSensorThread, sizeof(waSensorThread), NORMALPRIO - 1, SensorThread, (void*)"sensor");
+  chThdCreateStatic(waRegistrationThread, sizeof(waRegistrationThread), NORMALPRIO - 2, RegistrationThread, (void*)"reg");
+  chThdCreateStatic(waSensorThread, sizeof(waSensorThread), NORMALPRIO - 3, SensorThread, (void*)"sensor");
   chThdCreateStatic(waModemThread, sizeof(waModemThread), NORMALPRIO, ModemThread, (void*)"modem");
   chThdCreateStatic(waAlertThread, sizeof(waAlertThread), NORMALPRIO, AlertThread, (void*)"alert");
   chThdCreateStatic(waServiceThread, sizeof(waServiceThread), NORMALPRIO, ServiceThread, (void*)"service");
   chThdCreateStatic(waRadioThread, sizeof(waRadioThread), NORMALPRIO, RadioThread, (void*)"radio");
   chThdCreateStatic(waTriggerThread, sizeof(waTriggerThread), NORMALPRIO - 1, TriggerThread, (void*)"trigger");
   chThdCreateStatic(waTclThread, sizeof(waTclThread), LOWPRIO + 1, tclThread, (void*)"tcl");
-  chThdCreateStatic(waMqttThread, sizeof(waMqttThread), NORMALPRIO - 2, MqttThread, (void*)"mqtt");
+  chThdCreateStatic(waMqttPubThread, sizeof(waMqttPubThread), NORMALPRIO - 5, MqttPubThread, (void*)"mqttPub");
+  chThdCreateStatic(waMqttSubThread, sizeof(waMqttSubThread), NORMALPRIO - 6, MqttSubThread, (void*)"mqttSub");
   //chThdCreateStatic(waShell, sizeof(waShell), NORMALPRIO, shellThread, (void *)&shell_cfg);
   chThdCreateStatic(waHeartBeatThread, sizeof(waHeartBeatThread), LOWPRIO, HeartBeatThread, (void*)"h-beat");
 
@@ -283,7 +294,6 @@ int main(void) {
     writeToBkpRTC((uint8_t*)&group, sizeof(group), 0);
   }
 
-  // TODO OHS Allow driver to set frequency
   // RFM69 key
   if (conf.radioKey[0] != 0) rfm69Encrypt(conf.radioKey);
 
@@ -313,6 +323,12 @@ int main(void) {
   for (uint8_t i = 0; i < TIMER_SIZE; i++) {
     if (GET_CONF_TIMER_ENABLED(conf.timer[i].setting)) setTimer(i, true);
   }
+
+  // Starting the watchdog driver.
+  wdgStart(&WDGD1, &wdgcfg);
+  // Log reset reason
+  tmpLog[0] = 'S'; tmpLog[1] = 'r'; tmpLog[2] = resetReason;
+  pushToLog(tmpLog, 3);
 
   // Idle runner
   while (true) {

@@ -55,23 +55,23 @@ static THD_FUNCTION(RegistrationThread, arg) {
                 node[nodeIndex].value = DUMMY_NO_VALUE;
                 // Send initial state to Key node.
                 groupNum = GET_NODE_GROUP(inMsg->setting);
-                if (GET_GROUP_ALARM(group[groupNum].setting) == 0) {
-                  if (GET_GROUP_WAIT_AUTH(group[groupNum].setting)) {
-                    sendCmd(inMsg->address, NODE_CMD_AUTH_1);
-                  } else {
-                    if (GET_GROUP_ARMED(group[groupNum].setting)) {
-                      sendCmd(inMsg->address, NODE_CMD_ARMED);
-                    } else {
-                      if (group[groupNum].armDelay > 0) {
-                        sendCmd(inMsg->address, NODE_CMD_ARMING);
-                      } else {
-                        sendCmd(inMsg->address, NODE_CMD_DISARM);
-                      }
-                    }
-                  }
-                } else {
-                  sendCmd(inMsg->address, NODE_CMD_ALARM);
-                }
+//                if (GET_GROUP_ALARM(group[groupNum].setting) == 0) {
+//                  if (GET_GROUP_WAIT_AUTH(group[groupNum].setting)) {
+//                    sendCmd(inMsg->address, NODE_CMD_AUTH_1);
+//                  } else {
+//                    if (GET_GROUP_ARMED(group[groupNum].setting)) {
+//                      sendCmd(inMsg->address, NODE_CMD_ARMED_AWAY);
+//                    } else {
+//                      if (group[groupNum].armDelay > 0) {
+//                        sendCmd(inMsg->address, NODE_CMD_ARMING);
+//                      } else {
+//                        sendCmd(inMsg->address, NODE_CMD_DISARM);
+//                      }
+//                    }
+//                  }
+//                } else {
+//                  sendCmd(inMsg->address, NODE_CMD_ALARM);
+//                }
               } else {
                 // Reset node value to 0
                 node[nodeIndex].value = 0;
@@ -83,7 +83,11 @@ static THD_FUNCTION(RegistrationThread, arg) {
             }
           }
           // MQTT publish name
-          if (GET_NODE_MQTT(node[nodeIndex].setting)) pushToMqtt(typeSensor, nodeIndex, functionName);
+          if (GET_NODE_MQTT(node[nodeIndex].setting))
+            pushToMqtt(typeSensor, nodeIndex, functionName);
+          // MQTT Home Assistant Discovery
+          if (GET_NODE_MQTT_HAD(node[nodeIndex].setting))
+            pushToMqttHAD(typeSensor, nodeIndex, functionHAD, 1);
           break;
           case 'Z': // Zone
             tmpLog[0] = 'Z'; // Log data

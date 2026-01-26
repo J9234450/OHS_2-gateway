@@ -56,18 +56,6 @@ static THD_FUNCTION(ZoneThread, arg) {
   // Delay to allow MQTT to proceed
   chThdSleepSeconds(1);
 
-  // Manage zone MQTT publish
-  for (uint8_t i=0; i < ALARM_ZONES ; i++) {
-    if (GET_CONF_ZONE_ENABLED(conf.zone[i])) {
-      // MQTT Pub
-      if (GET_CONF_ZONE_MQTT_PUB(conf.zone[i])) {
-        pushToMqtt(typeZone, i, functionName);
-      }
-    }
-  }
-  // Delay to allow MQTT to proceed
-  chThdSleepSeconds(1);
-
   while (true) {
     chThdSleepMilliseconds(250); // time is used also for arm delay and others ...
 
@@ -77,7 +65,7 @@ static THD_FUNCTION(ZoneThread, arg) {
         group[i].armDelay--;
         if (group[i].armDelay == 0) {
           SET_GROUP_ARMED(group[i].setting); // Arm group
-          sendCmdToGrp(i, NODE_CMD_ARMED, 'K');  // Send arm message to all nodes
+          sendCmdToGrp(i, NODE_CMD_ARMED_AWAY, 'K');  // Send arm message to all nodes
           tmpLog[0] = 'G'; tmpLog[1] = 'S'; tmpLog[2] = i;  pushToLog(tmpLog, 3);
           // Save group state
           writeToBkpRTC((uint8_t*)&group, sizeof(group), 0);

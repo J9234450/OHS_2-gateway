@@ -5,8 +5,8 @@
  *      Author: vysocan
  */
 
-#ifndef OHS_HTTPDHANDLER_H_
-#define OHS_HTTPDHANDLER_H_
+#ifndef OHS_HTTPD_HANDLER_H_
+#define OHS_HTTPD_HANDLER_H_
 
 #include "lwip/opt.h"
 #include "lwip/apps/fs.h"
@@ -102,7 +102,7 @@ static const webPage_t webPage[] = {
   {"/timer.html",   "Timers"},
   {"/trigger.html", "Triggers"},
   {"/tcl.html",     "Scripts"},
-  {"/login.html",   "Login"}
+  {"/login.html",   "Login"} // keep as last page
 };
 // HTML pages global variables to remember elements user works with last
 static uint8_t webNode = 0, webContact = 0, webKey = 0, webZone = 0,
@@ -193,6 +193,7 @@ int fs_open_custom(struct fs_file *file, const char *name){
           chprintf(chp, "%s%s", html_e_th_th, text_Address);
           chprintf(chp, "%s%s", html_e_th_th, text_On);
           chprintf(chp, "%s%s", html_e_th_th, text_MQTT);
+          chprintf(chp, "%s%s", html_e_th_th, text_HAD);
           chprintf(chp, "%s%s %s", html_e_th_th, text_Last, text_message);
           chprintf(chp, "%s%s", html_e_th_th, text_Queued);
           chprintf(chp, "%s%s", html_e_th_th, text_Type);
@@ -209,13 +210,15 @@ int fs_open_custom(struct fs_file *file, const char *name){
               chprintf(chp, "%s", html_e_td_td);
               printOkNok(chp, GET_NODE_MQTT(node[i].setting));
               chprintf(chp, "%s", html_e_td_td);
+              printOkNok(chp, GET_NODE_MQTT_HAD(node[i].setting));
+              chprintf(chp, "%s", html_e_td_td);
               printFrmTimestamp(chp, &node[i].lastOK);
               chprintf(chp, "%s", html_e_td_td);
               if (node[i].queue) number = 1;
               else number = 0;
               printOkNok(chp, number); // queued
               chprintf(chp, "%s", html_e_td_td);
-              printNodeType(chp, node[i].type);
+              chprintf(chp, "%s", getNodeTypeString(node[i].type));
               chprintf(chp, "%s", html_e_td_td);
               printNodeFunction(chp, node[i].function);
               chprintf(chp, "%s", html_e_td_td);
@@ -243,11 +246,13 @@ int fs_open_custom(struct fs_file *file, const char *name){
           chprintf(chp, "%s%s%s", html_e_td_e_tr_tr_td, text_Address, html_e_td_td);
           printNodeAddress(chp, node[webNode].address, node[webNode].type, node[webNode].function, node[webNode].number, true);
           chprintf(chp, "%s%s%s", html_e_td_e_tr_tr_td, text_Type, html_e_td_td);
-          printNodeType(chp, node[webNode].type);
+          chprintf(chp, "%s", getNodeTypeString(node[webNode].type));
           chprintf(chp, "%s%s%s", html_e_td_e_tr_tr_td, text_Function, html_e_td_td);
           printNodeFunction(chp, node[webNode].function);
           chprintf(chp, "%s%s %s%s", html_e_td_e_tr_tr_td, text_Node, text_is, html_e_td_td);
           printOnOffButton(chp, "0", GET_NODE_ENABLED(node[webNode].setting));
+          chprintf(chp, "%s%s %s %s%s", html_e_td_e_tr_tr_td, text_MQTT, text_HA, text_Discovery, html_e_td_td);
+          printOnOffButton(chp, "6", GET_NODE_MQTT_HAD(node[webNode].setting));
           chprintf(chp, "%s%s %s%s", html_e_td_e_tr_tr_td, text_MQTT, text_publish, html_e_td_td);
           printOnOffButton(chp, "7", GET_NODE_MQTT(node[webNode].setting));
           chprintf(chp, "%s%s%s", html_e_td_e_tr_tr_td, text_Group, html_e_td_td);
@@ -488,7 +493,7 @@ int fs_open_custom(struct fs_file *file, const char *name){
           }
           chprintf(chp, "%s%s", html_e_td_e_tr, html_e_table);
           // Buttons
-          chprintf(chp, "%s%s%s", html_Apply, html_Save, html_SendDummy);
+          chprintf(chp, "%s%s%s", html_Apply, html_Save, html_SendTest);
           break;
         case PAGE_LOG:
           chprintf(chp, "%s#", html_tr_th);
@@ -696,13 +701,13 @@ int fs_open_custom(struct fs_file *file, const char *name){
           chprintf(chp, "%s%s", html_e_td_e_tr, html_e_table);
           chprintf(chp, "<h1>%s</h1>\r\n", text_Modem);
           chprintf(chp, "%s%s", html_table, html_tr_td);
-          chprintf(chp, "%s%s%s", text_Type, html_e_td_td, gprsModemInfo);
+          chprintf(chp, "%s%s%s", text_Type, html_e_td_td, modemModelInfo);
           chprintf(chp, "%s%s%s", html_e_td_e_tr_tr_td, text_On, html_e_td_td);
           printOkNok(chp, !palReadPad(GPIOD, GPIOD_GSM_STATUS));
           chprintf(chp, "%s%s%s", html_e_td_e_tr_tr_td, text_Alive, html_e_td_td);
-          printOkNok(chp, gprsIsAlive);
+          printOkNok(chp, modemIsAlive);
           chprintf(chp, "%s%sed%s", html_e_td_e_tr_tr_td, text_Register, html_e_td_td);
-          switch(gprsReg){
+          switch(modemReg){
             case 0 : chprintf(chp, "%s", html_i_OK); break;
             case 1 : chprintf(chp, "%s", html_i_home); break;
             case 2 : chprintf(chp, "%s", html_i_starting); break;
@@ -710,14 +715,14 @@ int fs_open_custom(struct fs_file *file, const char *name){
             case 5 : chprintf(chp, "%s", html_i_globe); break;
             default : chprintf(chp, "%s", html_i_question);; break; // case 4
           }
-          chprintf(chp, "%s%s %s%s%u%%", html_e_td_e_tr_tr_td, text_Signal, text_strength, html_e_td_td, gprsStrength);
+          chprintf(chp, "%s%s %s%s%u%%", html_e_td_e_tr_tr_td, text_Signal, text_strength, html_e_td_td, modemSigStrength);
           // +CPSI: GSM,Online,230-02,0x0726,4285,69 // remove +CPSI: &[7]
-          chprintf(chp, "%s%s %s%s%s%", html_e_td_e_tr_tr_td, text_System, text_info, html_e_td_td, &gprsSystemInfo[7]);
+          chprintf(chp, "%s%s %s%s%s%", html_e_td_e_tr_tr_td, text_System, text_info, html_e_td_td, &modemSystemInfo[7]);
           chprintf(chp, "%s%s", html_e_td_e_tr, html_e_table);
           // Buttons
           chprintf(chp, "%s%s", html_LoadDefault, html_Save);
           // TODO OHS add configuration download/upload
-          //chprintf(chp, "<a href='config.bin' download>");
+          //chprintf(chp, "<button type=\"submit\" onclick=\"window.open('/config.bin')\">Download</button>");
           break;
         case PAGE_SETTING:
           // Information table
@@ -744,7 +749,7 @@ int fs_open_custom(struct fs_file *file, const char *name){
           printTextInputWMin(chp, 'K', conf.radioKey, RADIO_KEY_SIZE - 1, RADIO_KEY_SIZE - 1);
           chprintf(chp, "%s%s%s", html_e_td_e_tr_tr_td, text_Frequency, html_e_td_td);
           printTwoButton(chp, "i", GET_CONF_SYSTEM_FLAG_RADIO_FREQ(conf.systemFlags), 0, 0b00,
-                                   "868 Mhz", "915 Mhz");
+                                   "868 MHz", "915 MHz");
           chprintf(chp, "%s%s", html_e_td_e_tr, html_e_table);
 
           chprintf(chp, "<h1>%s</h1>\r\n%s", text_SMTP, html_table);
@@ -1363,6 +1368,16 @@ int fs_open_custom(struct fs_file *file, const char *name){
       }
     }
   }
+  // Other files
+  if (strcmp(name, "/config.bin") == 0) {
+    // Serve
+    file->data = (const char *)&conf;
+    file->len = sizeof(conf);
+    file->index = file->len;
+    // allow persistent connections
+    file->flags = FS_FILE_FLAGS_HEADER_PERSISTENT;
+    return 1;
+  }
   return 0;
 }
 /*
@@ -1541,7 +1556,7 @@ void httpd_post_finished(void *connection, char *response_uri, u16_t response_ur
                   if (number != webNode) { webNode = number; repeat = 0; }
                 break;
                 case 'R': // Re-registration
-                  resp = sendCmd(15, NODE_CMD_REGISTRATION); // Broadcast to register
+                  resp = sendCmd(RADIO_UNIT_OFFSET, NODE_CMD_REGISTRATION); // Broadcast to register
                 break;
                 case 'A': // Apply
                   message[0] = 'R';
@@ -1587,11 +1602,17 @@ void httpd_post_finished(void *connection, char *response_uri, u16_t response_ur
                   strncpy(node[webNode].name, valueP, LWIP_MIN(valueLen, NAME_LENGTH - 1));
                   node[webNode].name[LWIP_MIN(valueLen, NAME_LENGTH - 1)] = 0;
                   // MQTT
-                  if (resp) pushToMqtt(typeSensor, webNode, functionName);
+                  if (resp) {
+                    pushToMqtt(typeSensor, webNode, functionName);
+                    // HAD
+                    if (GET_NODE_MQTT_HAD(node[webNode].setting)) {
+                      pushToMqttHAD(typeSensor, webNode, functionHAD, 1);
+                    }
+                  }
                 break;
                 case '0' ... '7': // Handle all single radio buttons for settings
                   if (valueP[0] == '0') node[webNode].setting &= ~(1 << (name[0]-48));
-                  else                 node[webNode].setting |=  (1 << (name[0]-48));
+                  else                  node[webNode].setting |=  (1 << (name[0]-48));
                 break;
                 case 'g': // group
                   number = strtol(valueP, NULL, 10);
@@ -1651,7 +1672,7 @@ void httpd_post_finished(void *connection, char *response_uri, u16_t response_ur
                   conf.key[webKey].contact = strtol(valueP, NULL, 10);
                 break;
                 case 'k': // key
-                  conf.key[webKey].value = strtoul(valueP, NULL, 16); // as unsigned long int
+                  safeStrtoul(valueP, &conf.key[webKey].value , 16); // as unsigned long int
                 break;
                 case '0' ... '7': // Handle all single radio buttons for settings
                   if (valueP[0] == '0') conf.key[webKey].setting &= ~(1 << (name[0]-48));
@@ -2348,4 +2369,4 @@ void httpd_authorize_fs_open(void *connection, const char **name){
   authorizedConn.conn = NULL;
 }
 
-#endif /* OHS_HTTPDHANDLER_H_ */
+#endif /* OHS_HTTPD_HANDLER_H_ */
